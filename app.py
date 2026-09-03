@@ -14,7 +14,8 @@ st.set_page_config(
 st.title("Micro-Merchant Insolvency & Automated Diagnostic Suite")
 st.markdown(
     "Institutional-grade cash runway engine featuring macro scenario presets,"
-    " CSV statement parsing, and dynamic survival playbooks."
+    " CSV statement parsing, dynamic survival playbooks, and tail-risk VaR/CVaR"
+    " metrics."
 )
 
 # --- SIDEBAR CONFIGURATION ---
@@ -170,7 +171,7 @@ def run_simulation(
           if hit_zero_month is None:
             hit_zero_month = m
 
-      sim_results[i, m] = max(0, curr_cash)
+      sim_results[i, m] = curr_cash
 
     if hit_zero_month is not None:
       insolvent_count += 1
@@ -180,10 +181,15 @@ def run_simulation(
   avg_insolvency_horizon = (
       np.mean(first_insolvency_month) if first_insolvency_month else 12.0
   )
-  return sim_results, prob_of_default, avg_insolvency_horizon
+
+  ending_liquidity = sim_results[:, -1]
+  var_95 = np.percentile(ending_liquidity, 5)
+  cvar_95 = np.mean(ending_liquidity[ending_liquidity <= var_95])
+
+  return sim_results, prob_of_default, avg_insolvency_horizon, var_95, cvar_95
 
 
-sim_data, default_prob, avg_horizon = run_simulation(
+sim_data, default_prob, avg_horizon, var_95, cvar_95 = run_simulation(
     starting_cash,
     monthly_revenue,
     fixed_overhead,
@@ -205,11 +211,11 @@ for _ in range(1, 13):
   eff_rev = monthly_revenue * coll_f
   net = eff_rev - (fixed_overhead + (eff_rev * variable_cost_pct))
   curr_b += net
-  baseline_cash.append(max(0, curr_b))
+  baseline_cash.append(curr_b)
 
 # --- KPI METRICS DISPLAY ---
 st.write("---")
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 with c1:
   st.metric(
       "Probability of Default",
@@ -226,11 +232,13 @@ with c2:
       "Median Ending Liquidity", f"${np.median(sim_data[:, -1]):,.0f}"
   )
 with c3:
-  st.metric("Working Capital Lag", f"{dso_days} Days DSO")
+  st.metric("95% Tail VaR", f"${var_95:,.0f}")
 with c4:
+  st.metric("95% Tail CVaR", f"${cvar_95:,.0f}", delta_color="inverse")
+with c5:
   st.metric(
       "Expected Default Horizon",
-      f"Month {int(avg_horizon)}" if default_prob > 0 else "N/A (No Default)",
+      f"Month {int(avg_horizon)}" if default_prob > 0 else "N/A",
   )
 
 # --- DYNAMIC SURVIVAL PLAYBOOK ---
@@ -309,7 +317,7 @@ heatmap_matrix = np.zeros((len(dso_range), len(shock_range)))
 
 for d_idx, d in enumerate(dso_range):
   for s_idx, s in enumerate(shock_range):
-    _, temp_prob, _ = run_simulation(
+    _, temp_prob, _, _, _ = run_simulation(
         starting_cash,
         monthly_revenue,
         fixed_overhead,
