@@ -36,7 +36,6 @@ if intake_mode == "Upload Financial CSV (P&L)":
   if uploaded_file is not None:
     df_user = pd.read_csv(uploaded_file)
     st.sidebar.success("CSV Loaded Successfully!")
-    # Auto-extract latest metrics if available
     if "Revenue" in df_user.columns:
       monthly_revenue = float(df_user["Revenue"].iloc[-1])
     if "Expenses" in df_user.columns:
@@ -57,7 +56,6 @@ scenario = st.sidebar.selectbox(
     ],
 )
 
-# Preset Logic overrides
 if scenario == "Supply Chain Crunch (High Variable Cost)":
   default_shock = 0.15
   default_vol = 0.25
@@ -92,11 +90,15 @@ if intake_mode == "Manual Sliders":
       "Monthly Fixed Overhead ($)", value=fixed_overhead, step=500
   )
   variable_cost_pct = (
-      st.sidebar.slider("Variable Cost Percentage (%)", 0, 100, int(var_override * 100))
+      st.sidebar.slider(
+          "Variable Cost Percentage (%)", 0, 100, int(var_override * 100)
+      )
       / 100.0
   )
 
-dso_days = st.sidebar.slider("Accounts Receivable Lag (DSO Days)", 0, 90, default_dso)
+dso_days = st.sidebar.slider(
+    "Accounts Receivable Lag (DSO Days)", 0, 90, default_dso
+)
 credit_limit = st.sidebar.number_input(
     "Revolving Credit Line Limit ($)", value=10000, step=1000
 )
@@ -106,18 +108,16 @@ credit_apr = (
 
 st.sidebar.header("4. Stochastic Monte Carlo Controls")
 volatility = (
-    st.sidebar.slider(
-        "Revenue Volatility (%)", 5, 40, int(default_vol * 100)
-    )
+    st.sidebar.slider("Revenue Volatility (%)", 5, 40, int(default_vol * 100))
     / 100.0
 )
 shock_factor = (
-    st.sidebar.slider(
-        "Target Market Shock (%)", 0, 50, int(default_shock * 100)
-    )
+    st.sidebar.slider("Target Market Shock (%)", 0, 50, int(default_shock * 100))
     / 100.0
 )
-sims_count = st.sidebar.selectbox("Monte Carlo Iterations", [100, 500, 1000], index=1)
+sims_count = st.sidebar.selectbox(
+    "Monte Carlo Iterations", [100, 500, 1000], index=1
+)
 
 
 # --- SIMULATION ENGINE ---
@@ -166,7 +166,7 @@ def run_simulation(
           curr_cash = 0.0
         else:
           debt_balance += available_credit
-          curr_cash = - (deficit - available_credit)
+          curr_cash = -(deficit - available_credit)
           if hit_zero_month is None:
             hit_zero_month = m
 
@@ -240,7 +240,7 @@ if default_prob > 40:
   st.error(
       "**CRITICAL ACTION REQUIRED:** High insolvency probability detected."
       f" Immediate restructuring needed. **Recommendation:** Reduce fixed"
-      f" overhead by at least {int(fixed_overhead*0.25):,.0f}/month or freeze"
+      f" overhead by at least ${int(fixed_overhead*0.25):,.0f}/month or freeze"
       f" non-essential variable expenditures to extend runway past Month"
       f" {int(avg_horizon)}."
   )
@@ -294,6 +294,49 @@ fig.update_layout(
     xaxis_title="Timeline (Months)", yaxis_title="Liquidity + Credit Buffer ($)"
 )
 st.plotly_chart(fig, use_container_width=True)
+
+# --- INTERACTIVE SENSITIVITY HEATMAP ---
+st.write("---")
+st.subheader("Interactive Risk Sensitivity Matrix")
+st.markdown(
+    "Mapping Probability of Default (%) across varying market shocks and"
+    " collection delays."
+)
+
+shock_range = np.linspace(0.0, 0.5, 6)
+dso_range = np.array([0, 15, 30, 45, 60, 75, 90])
+heatmap_matrix = np.zeros((len(dso_range), len(shock_range)))
+
+for d_idx, d in enumerate(dso_range):
+  for s_idx, s in enumerate(shock_range):
+    _, temp_prob, _ = run_simulation(
+        starting_cash,
+        monthly_revenue,
+        fixed_overhead,
+        variable_cost_pct,
+        int(d),
+        credit_limit,
+        credit_apr,
+        volatility,
+        s,
+        100,
+    )
+    heatmap_matrix[d_idx, s_idx] = temp_prob
+
+fig_heat = go.Figure(
+    data=go.Heatmap(
+        z=heatmap_matrix,
+        x=[f"{int(s*100)}% Shock" for s in shock_range],
+        y=[f"{d} Days DSO" for d in dso_range],
+        colorscale="Reds",
+        colorbar=dict(title="Default Prob %"),
+    )
+)
+fig_heat.update_layout(
+    xaxis_title="Market Shock Severity",
+    yaxis_title="Accounts Receivable Lag",
+)
+st.plotly_chart(fig_heat, use_container_width=True)
 
 # --- EXPORT REPORT BUTTON ---
 st.subheader("Institutional Memo Export")
