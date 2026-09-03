@@ -1,3 +1,4 @@
+import io
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -5,36 +6,97 @@ import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
-    page_title="Insolvency & Working Capital Stress Engine",
+    page_title="Insolvency, Working Capital & Diagnostic Engine",
     page_icon="📈",
     layout="wide",
 )
 
-st.title("Micro-Merchant Insolvency, Working Capital & Credit Line Stress Engine")
+st.title("Micro-Merchant Insolvency & Automated Diagnostic Suite")
 st.markdown(
-    "Institutional liquidity forecasting incorporating Cash Conversion Cycle"
-    " (DSO/DPO) drag, revolving debt servicing, and Monte Carlo default"
-    " probabilities."
+    "Institutional-grade cash runway engine featuring macro scenario presets,"
+    " CSV statement parsing, and dynamic survival playbooks."
 )
 
-st.sidebar.header("1. Core Financial Inputs")
-starting_cash = st.sidebar.number_input(
-    "Current Liquid Cash Balance ($)", value=25000, step=1000
-)
-monthly_revenue = st.sidebar.number_input(
-    "Baseline Monthly Revenue ($)", value=12000, step=500
-)
-fixed_overhead = st.sidebar.number_input(
-    "Monthly Fixed Overhead ($)", value=8000, step=500
-)
-variable_cost_pct = (
-    st.sidebar.slider("Variable Cost Percentage (%)", 0, 100, 40) / 100.0
+# --- SIDEBAR CONFIGURATION ---
+st.sidebar.header("1. Data Intake Method")
+intake_mode = st.sidebar.radio(
+    "Choose Input Source", ["Manual Sliders", "Upload Financial CSV (P&L)"]
 )
 
-st.sidebar.header("2. Working Capital & Debt Parameters")
-dso_days = st.sidebar.slider(
-    "Accounts Receivable Lag (DSO Days)", 0, 90, 30
-)  # Collection delay
+# Defaults
+starting_cash = 25000
+monthly_revenue = 12000
+fixed_overhead = 8000
+variable_cost_pct = 0.40
+
+if intake_mode == "Upload Financial CSV (P&L)":
+  uploaded_file = st.sidebar.file_uploader(
+      "Upload CSV (Columns: Month, Revenue, Expenses)"
+  )
+  if uploaded_file is not None:
+    df_user = pd.read_csv(uploaded_file)
+    st.sidebar.success("CSV Loaded Successfully!")
+    # Auto-extract latest metrics if available
+    if "Revenue" in df_user.columns:
+      monthly_revenue = float(df_user["Revenue"].iloc[-1])
+    if "Expenses" in df_user.columns:
+      fixed_overhead = float(df_user["Expenses"].iloc[-1])
+  else:
+    st.sidebar.info(
+        "Using default baseline values until a valid CSV is uploaded."
+    )
+
+st.sidebar.header("2. Macro Scenario Presets")
+scenario = st.sidebar.selectbox(
+    "Load Economic Shock Preset",
+    [
+        "Custom Configuration",
+        "Supply Chain Crunch (High Variable Cost)",
+        "Inflationary Overhead Spike",
+        "Severe Revenue Demand Drop",
+    ],
+)
+
+# Preset Logic overrides
+if scenario == "Supply Chain Crunch (High Variable Cost)":
+  default_shock = 0.15
+  default_vol = 0.25
+  default_dso = 45
+  var_override = 0.65
+elif scenario == "Inflationary Overhead Spike":
+  default_shock = 0.05
+  default_vol = 0.10
+  default_dso = 30
+  fixed_overhead = fixed_overhead * 1.35
+  var_override = variable_cost_pct
+elif scenario == "Severe Revenue Demand Drop":
+  default_shock = 0.35
+  default_vol = 0.30
+  default_dso = 60
+  var_override = variable_cost_pct
+else:
+  default_shock = 0.20
+  default_vol = 0.15
+  default_dso = 30
+  var_override = variable_cost_pct
+
+st.sidebar.header("3. Operational & Debt Parameters")
+if intake_mode == "Manual Sliders":
+  starting_cash = st.sidebar.number_input(
+      "Current Liquid Cash ($)", value=starting_cash, step=1000
+  )
+  monthly_revenue = st.sidebar.number_input(
+      "Baseline Monthly Revenue ($)", value=monthly_revenue, step=500
+  )
+  fixed_overhead = st.sidebar.number_input(
+      "Monthly Fixed Overhead ($)", value=fixed_overhead, step=500
+  )
+  variable_cost_pct = (
+      st.sidebar.slider("Variable Cost Percentage (%)", 0, 100, int(var_override * 100))
+      / 100.0
+  )
+
+dso_days = st.sidebar.slider("Accounts Receivable Lag (DSO Days)", 0, 90, default_dso)
 credit_limit = st.sidebar.number_input(
     "Revolving Credit Line Limit ($)", value=10000, step=1000
 )
@@ -42,19 +104,24 @@ credit_apr = (
     st.sidebar.slider("Credit Line Interest Rate (APR %)", 0, 36, 14) / 100.0
 )
 
-st.sidebar.header("3. Stochastic & Shock Parameters")
+st.sidebar.header("4. Stochastic Monte Carlo Controls")
 volatility = (
-    st.sidebar.slider("Revenue Volatility / Uncertainty (%)", 5, 40, 15) / 100.0
+    st.sidebar.slider(
+        "Revenue Volatility (%)", 5, 40, int(default_vol * 100)
+    )
+    / 100.0
 )
 shock_factor = (
-    st.sidebar.slider("Target Market Shock Drop (%)", 0, 50, 20) / 100.0
+    st.sidebar.slider(
+        "Target Market Shock (%)", 0, 50, int(default_shock * 100)
+    )
+    / 100.0
 )
-simulations_count = st.sidebar.selectbox(
-    "Monte Carlo Iterations", [100, 500, 1000], index=1
-)
+sims_count = st.sidebar.selectbox("Monte Carlo Iterations", [100, 500, 1000], index=1)
 
 
-def run_advanced_monte_carlo(
+# --- SIMULATION ENGINE ---
+def run_simulation(
     cash,
     rev,
     fixed,
@@ -70,66 +137,53 @@ def run_advanced_monte_carlo(
   np.random.seed(42)
   sim_results = np.zeros((sims, months + 1))
   sim_results[:, 0] = cash
-
   monthly_interest_rate = apr / 12.0
-  collection_factor = 1.0 - (
-      dso / 90.0
-  )  # Simplified cash collection efficiency drag based on DSO
+  collection_factor = 1.0 - (dso / 90.0)
 
   insolvent_count = 0
+  first_insolvency_month = []
 
   for i in range(sims):
     curr_cash = cash
     debt_balance = 0.0
-    hit_zero = False
+    hit_zero_month = None
 
     for m in range(1, months + 1):
-      # Apply market shock and volatility noise
       shocked_rev = rev * (1 - shock)
       monthly_shock = np.random.normal(loc=0, scale=vol * shocked_rev)
       realized_rev = max(0, shocked_rev + monthly_shock)
-
-      # Adjust revenue realization based on DSO collection lag
       effective_rev = realized_rev * collection_factor
 
-      # Costs calculation
-      variable_costs = effective_rev * var_pct
-      total_outflow = fixed + variable_costs
-
-      # Net cash operations before debt
-      net_flow = effective_rev - total_outflow
-
-      # Service existing debt interest if any
-      interest_charge = debt_balance * monthly_interest_rate
-      net_flow -= interest_charge
-
+      net_flow = effective_rev - (fixed + (effective_rev * var_pct))
+      net_flow -= debt_balance * monthly_interest_rate
       curr_cash += net_flow
 
-      # Credit Line logic if cash goes negative
       if curr_cash < 0:
         deficit = abs(curr_cash)
         available_credit = limit - debt_balance
-
         if deficit <= available_credit:
           debt_balance += deficit
-          curr_cash = 0.0  
+          curr_cash = 0.0
         else:
-          # Maxed out credit facility -> Hard Insolvency
           debt_balance += available_credit
           curr_cash = - (deficit - available_credit)
-          hit_zero = True
+          if hit_zero_month is None:
+            hit_zero_month = m
 
       sim_results[i, m] = max(0, curr_cash)
 
-    if hit_zero or curr_cash < 0:
+    if hit_zero_month is not None:
       insolvent_count += 1
+      first_insolvency_month.append(hit_zero_month)
 
   prob_of_default = (insolvent_count / sims) * 100
-  return sim_results, prob_of_default
+  avg_insolvency_horizon = (
+      np.mean(first_insolvency_month) if first_insolvency_month else 12.0
+  )
+  return sim_results, prob_of_default, avg_insolvency_horizon
 
 
-# Execute Advanced Simulation
-sim_data, default_prob = run_advanced_monte_carlo(
+sim_data, default_prob, avg_horizon = run_simulation(
     starting_cash,
     monthly_revenue,
     fixed_overhead,
@@ -139,10 +193,10 @@ sim_data, default_prob = run_advanced_monte_carlo(
     credit_apr,
     volatility,
     shock_factor,
-    simulations_count,
+    sims_count,
 )
 
-# Deterministic Baseline with Working Capital Drag
+# Baseline deterministic calculation
 months_list = list(range(0, 13))
 baseline_cash = [starting_cash]
 curr_b = starting_cash
@@ -153,51 +207,63 @@ for _ in range(1, 13):
   curr_b += net
   baseline_cash.append(max(0, curr_b))
 
-# KPI Metric Cards
+# --- KPI METRICS DISPLAY ---
 st.write("---")
-col1, col2, col3, col4 = st.columns(4)
-with col1:
+c1, c2, c3, c4 = st.columns(4)
+with c1:
   st.metric(
-      label="Probability of Default (12M)",
-      value=f"{default_prob:.1f}%",
+      "Probability of Default",
+      f"{default_prob:.1f}%",
       delta=(
           "Critical Risk"
           if default_prob > 30
-          else ("Elevated Risk" if default_prob > 10 else "Secure State")
+          else ("Manageable" if default_prob > 10 else "Secure")
       ),
       delta_color="inverse",
   )
-with col2:
-  terminal_median = np.median(sim_data[:, -1])
+with c2:
   st.metric(
-      label="Median Ending Liquidity", value=f"${terminal_median:,.0f}"
+      "Median Ending Liquidity", f"${np.median(sim_data[:, -1]):,.0f}"
   )
-with col3:
+with c3:
+  st.metric("Working Capital Lag", f"{dso_days} Days DSO")
+with c4:
   st.metric(
-      label="Working Capital Lag (DSO)",
-      value=f"{dso_days} Days",
-      delta="Invoice Delay",
-      delta_color="off",
-  )
-with col4:
-  st.metric(
-      label="Credit Facility Capacity",
-      value=f"${credit_limit:,.0f}",
-      delta=f"APR: {int(credit_apr*100)}%",
-      delta_color="off",
+      "Expected Default Horizon",
+      f"Month {int(avg_horizon)}" if default_prob > 0 else "N/A (No Default)",
   )
 
+# --- DYNAMIC SURVIVAL PLAYBOOK ---
 st.write("---")
-st.subheader("Stochastic Liquidity Trajectories with Credit Facility Buffer")
-st.markdown(
-    f"Simulating {simulations_count} pathways factoring in a {dso_days}-day"
-    f" accounts receivable collection lag and a ${credit_limit:,.0f} revolving"
-    " credit safety net."
-)
+st.subheader("Automated Operational Survival Playbook")
+if default_prob > 40:
+  st.error(
+      "**CRITICAL ACTION REQUIRED:** High insolvency probability detected."
+      f" Immediate restructuring needed. **Recommendation:** Reduce fixed"
+      f" overhead by at least {int(fixed_overhead*0.25):,.0f}/month or freeze"
+      f" non-essential variable expenditures to extend runway past Month"
+      f" {int(avg_horizon)}."
+  )
+elif default_prob > 10:
+  st.warning(
+      "**MODERATE RISK WARNING:** Vulnerable to market shocks and invoice"
+      f" delays. **Recommendation:** Accelerate receivables collection to"
+      f" reduce DSO below {max(15, dso_days-15)} days, or negotiate a 30-day"
+      " payment extension with primary suppliers."
+  )
+else:
+  st.success(
+      "**SECURE LIQUIDITY STATE:** Current capital reserves and credit buffer"
+      " successfully absorb simulated volatility parameters. Optimal window"
+      " for strategic growth investment."
+  )
 
-# Plotly Spaghetti Chart
+# --- VISUALIZATIONS ---
+st.write("---")
+st.subheader("Stochastic Monte Carlo Trajectories")
+
 fig = go.Figure()
-for i in range(min(sims_count := simulations_count, 100)):
+for i in range(min(sims_count, 100)):
   fig.add_trace(
       go.Scatter(
           x=months_list,
@@ -208,11 +274,10 @@ for i in range(min(sims_count := simulations_count, 100)):
       )
   )
 
-median_path = np.median(sim_data, axis=0)
 fig.add_trace(
     go.Scatter(
         x=months_list,
-        y=median_path,
+        y=np.median(sim_data, axis=0),
         name="Median Monte Carlo Path",
         line=dict(color="#FF9900", width=3),
     )
@@ -221,24 +286,28 @@ fig.add_trace(
     go.Scatter(
         x=months_list,
         y=baseline_cash,
-        name="Working Capital Baseline",
+        name="Deterministic Baseline",
         line=dict(color="#00FFFF", width=3, dash="dash"),
     )
 )
-
 fig.update_layout(
-    xaxis_title="Timeline (Months)",
-    yaxis_title="Liquid Capital + Credit Buffer ($)",
-    legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+    xaxis_title="Timeline (Months)", yaxis_title="Liquidity + Credit Buffer ($)"
 )
 st.plotly_chart(fig, use_container_width=True)
 
-st.subheader("Advanced Risk Distribution Data")
+# --- EXPORT REPORT BUTTON ---
+st.subheader("Institutional Memo Export")
 df_summary = pd.DataFrame({
     "Month": months_list,
-    "Working Capital Baseline ($)": baseline_cash,
-    "MC 10th Percentile (Stress Case) ($)": np.percentile(sim_data, 10, axis=0),
+    "Baseline ($)": baseline_cash,
+    "MC 10th Percentile (Stress) ($)": np.percentile(sim_data, 10, axis=0),
     "MC 50th Percentile (Median) ($)": np.median(sim_data, axis=0),
     "MC 90th Percentile (Optimistic) ($)": np.percentile(sim_data, 90, axis=0),
 })
-st.dataframe(df_summary, use_container_width=True)
+csv_data = df_summary.to_csv(index=False).encode("utf-8")
+st.download_button(
+    label="Download Executive Stress-Test CSV Report",
+    data=csv_data,
+    file_name="insolvency_stress_report.csv",
+    mime="text/csv",
+)
